@@ -1,0 +1,1 @@
+# bk_telemetria_opt_bd
