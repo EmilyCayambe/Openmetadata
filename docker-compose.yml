@@ -1,0 +1,74 @@
+services:
+  db-primary:
+    image: postgres:16-alpine
+    container_name: db-primary
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-banco_telemetria}
+      POSTGRES_USER: ${POSTGRES_USER:-admin_db}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres123}
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+      - ./postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - pgdata:/var/lib/postgresql/data
+      - ./backup_storage:/backup_storage
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
+    networks:
+      - db-network
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:3.0.0
+    container_name: loki-server
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./telemetry/loki-config.yaml:/etc/loki/local-config.yaml:ro
+      - lokidata:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - db-network
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:3.0.0
+    container_name: promtail-agent
+    volumes:
+      - ./telemetry/promtail-config.yaml:/etc/promtail/config.yaml:ro
+      - pgdata:/var/lib/postgresql/data:ro
+    command: -config.file=/etc/promtail/config.yaml
+    networks:
+      - db-network
+    depends_on:
+      - db-primary
+      - loki
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:10.4.1
+    container_name: grafana-dashboard
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./telemetry/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./telemetry/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+    networks:
+      - db-network
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+networks:
+  db-network:
+    driver: bridge
+
+volumes:
+  pgdata:
+  lokidata:
+  grafanadata:

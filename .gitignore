@@ -1,0 +1,17 @@
+# Archivos pesados de backups locales
+backup_storage/full_backups/*.dump
+backup_storage/wal_archive/*
+!backup_storage/wal_archive/.gitkeep
+!backup_storage/full_backups/.gitkeep
+
+# Datos de contenedores y logs locales
+*.log
+.env
+__pycache__/
+*.pyc
+
+# IDEs y SO
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini

@@ -1,0 +1,28 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: postgresql
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: postgres_logs
+          environment: production_demo
+          service: db-primary
+          __path__: /var/lib/postgresql/data/log/*.log
+    pipeline_stages:
+      - match:
+          selector: '{job="postgres_logs"}'
+          stages:
+            - regex:
+                expression: '^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ \w+) \[(?P<pid>\d+)\] (?P<user_db>\w+@\w+) (?P<level>\w+):\s+(?P<message>.*)$'
+            - labels:
+                level:
