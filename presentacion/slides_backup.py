@@ -112,7 +112,7 @@ def agregar_slides_backup(prs):
     # --------------------------------------------------------------------------
     # SLIDE 3 (B3): ANATOMÍA INTERNA DEL WAL (WRITE-AHEAD LOGGING)
     # --------------------------------------------------------------------------
-    s3 = create_base_slide(prs, "Arquitectura Interna", "Anatomía del WAL: Convención Hexadecimal e Inspección Interna")
+    s3 = create_base_slide(prs, "Arquitectura Interna", "Anatomía del WAL y el Motor de Archivador (archive_mode)")
 
     add_card(s3, Inches(0.8), Inches(1.65), Inches(5.7), Inches(5.1), "Convención Hexadecimal de 24 Caracteres")
     tb = s3.shapes.add_textbox(Inches(1.05), Inches(2.25), Inches(5.2), Inches(4.3))
@@ -124,30 +124,28 @@ def agregar_slides_backup(prs):
     add_structured_item(tf, "Segmento LSN (Últimos 8 dígitos):", "0000001D representa el número correlativo del segmento dentro del ciclo activo.", 12)
     add_structured_item(tf, "Principio WAL Inviolable:", "Ningún registro se persiste en las tablas de datos sin antes haberse volcado en el WAL.", 12)
 
-    add_card(s3, Inches(6.8), Inches(1.65), Inches(5.7), Inches(5.1), "Decodificación con pg_waldump")
+    add_card(s3, Inches(6.8), Inches(1.65), Inches(5.7), Inches(5.1), "El Hilo del Motor: archive_mode")
     tb = s3.shapes.add_textbox(Inches(7.05), Inches(2.25), Inches(5.2), Inches(4.3))
     tf = tb.text_frame
     tf.word_wrap = True
-    add_structured_item(tf, "Utilidad Oficial:", "pg_waldump permite leer e inspeccionar los binarios WAL sin necesidad de iniciar PostgreSQL.", 12)
-    add_structured_item(tf, "Resource Manager (rmgr):", "Identifica el componente del motor afectado (Heap = datos de tabla, Btree = índices, Transaction = commits).", 12)
-    add_structured_item(tf, "Log Sequence Number (LSN):", "Puntero exacto en bytes (ej. 0/01000028) que marca la posición secuencial de la operación.", 12)
-    add_structured_item(tf, "Transaction ID (tx):", "Número de transacción único asociado para rastrear commits, aborts y rollbacks.", 12)
-    add_structured_item(tf, "Comando en Laboratorio:", "docker exec db-primary pg_waldump -n 8 /backup_storage/wal_archive/<archivo_wal>", 12)
+    add_structured_item(tf, "Qué es archive_mode:", "Interruptor maestro que activa el proceso interno de fondo (Archiver Process) en PostgreSQL.", 12)
+    add_structured_item(tf, "Parámetro POSTMASTER:", "No puede cambiarse al vuelo con un simple SET en DBeaver; exige reinicio del motor porque reserva memoria compartida al arrancar.", 12)
+    add_structured_item(tf, "Mecanismo Reactivo:", "En lugar de scripts manuales periódicos, el motor expulsa el archivo en el milisegundo exacto en que se sella el bloque de 16MB.", 12)
+    add_structured_item(tf, "Monitoreo con pg_stat_archiver:", "Vista del sistema que audita en vivo: archived_count (29 WALs), último archivo y hora exacta de despacho.", 12)
 
     # --------------------------------------------------------------------------
-    # SLIDE 4 (B4): COMANDOS NATIVOS DE PRODUCCIÓN Y FLAGS
+    # SLIDE 4 (B4): COMANDOS NATIVOS DE PRODUCCIÓN Y PARÁMETROS CRÍTICOS
     # --------------------------------------------------------------------------
-    s4 = create_base_slide(prs, "Operaciones y Herramientas", "Comandos Nativos de Producción: Parámetros y Banderas Críticas")
+    s4 = create_base_slide(prs, "Operaciones y Herramientas", "Comandos Nativos: Banderas Críticas y Sintaxis de Archivador")
 
-    add_card(s4, Inches(0.8), Inches(1.65), Inches(5.7), Inches(5.1), "Generación de Respaldo (pg_dump y WAL)")
+    add_card(s4, Inches(0.8), Inches(1.65), Inches(5.7), Inches(5.1), "Generación de Respaldo y archive_command")
     tb = s4.shapes.add_textbox(Inches(1.05), Inches(2.25), Inches(5.2), Inches(4.3))
     tf = tb.text_frame
     tf.word_wrap = True
-    add_structured_item(tf, "Comando Base:", "pg_dump -U admin_db -d banco_telemetria -F c -b -v -f <destino.dump>", 12)
-    add_structured_item(tf, "Bandera -F c (Custom Format):", "Comprime con zlib (13 MB para 600k filas) y genera metadatos que permiten restauraciones selectivas o multi-hilo (-j).", 12)
-    add_structured_item(tf, "Bandera -b (Blobs):", "Garantiza la inclusión de objetos binarios grandes sin pérdidas estructurales.", 12)
-    add_structured_item(tf, "Rotación Manual de WAL:", "SELECT pg_switch_wal(); fuerza el cierre del segmento actual para su archivado inmediato.", 12)
-    add_structured_item(tf, "archive_command:", "Parámetro en postgresql.conf que copia automáticamente cada segmento WAL cerrado al almacenamiento aislado.", 12)
+    add_structured_item(tf, "pg_dump con Formato Custom (-F c):", "Comprime con zlib (13 MB para 600k filas) y genera metadatos para restauraciones selectivas o paralelas (-j).", 12)
+    add_structured_item(tf, "Banderas -b (Blobs) y -v (Verbose):", "Garantizan integridad binaria y trazabilidad completa de cada tabla exportada.", 12)
+    add_structured_item(tf, "Sintaxis de archive_command:", "Utiliza %p (ruta del segmento cerrado en pg_wal) y %f (nombre del fichero) para enviar el WAL al destino seguro.", 12)
+    add_structured_item(tf, "Rotación Manual (pg_switch_wal):", "SELECT pg_switch_wal(); fuerza el sellado del bloque activo para archivado inmediato sin esperar archive_timeout.", 12)
 
     add_card(s4, Inches(6.8), Inches(1.65), Inches(5.7), Inches(5.1), "Procedimiento de Restauración (pg_restore)")
     tb = s4.shapes.add_textbox(Inches(7.05), Inches(2.25), Inches(5.2), Inches(4.3))
