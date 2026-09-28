@@ -8,7 +8,7 @@ Write-Host "=======================================================" -Foreground
 
 $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
-docker exec -e PGPASSWORD=postgres123 db-primary pg_restore -U admin_db -d banco_telemetria -t transacciones /backup_storage/full_backups/full_backup_base.dump
+docker exec -e PGPASSWORD=postgres123 db-primary pg_restore -U admin_db -d banco_telemetria --data-only -t transacciones /backup_storage/full_backups/full_backup_base.dump
 
 $stopwatch.Stop()
 $segundos = [math]::Round($stopwatch.Elapsed.TotalSeconds, 2)

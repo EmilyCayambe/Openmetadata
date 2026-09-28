@@ -24,12 +24,12 @@ docker exec -it db-primary ls -lh /backup_storage/full_backups/full_backup_base.
 # 5. VER WAL EN VIVO
 docker exec -it db-primary ls -lht /backup_storage/wal_archive
 
-# 6. CAUSAR DESASTRE (BORRAR TABLA)
-docker exec -e PGPASSWORD=postgres123 db-primary psql -U admin_db -d banco_telemetria -c "DROP TABLE transacciones CASCADE;"
+# 6. CAUSAR DESASTRE (BORRADO TOTAL DE DATOS)
+docker exec -e PGPASSWORD=postgres123 db-primary psql -U admin_db -d banco_telemetria -c "TRUNCATE TABLE transacciones;"
 docker exec -it db-primary psql -U admin_db -d banco_telemetria -c "SELECT count(*) FROM transacciones;"
 
 # 7. RESTAURAR SOLO FULL (MUESTRA 400,000 - FALTAN 10,000)
-docker exec -e PGPASSWORD=postgres123 db-primary pg_restore -U admin_db -d banco_telemetria -t transacciones /backup_storage/full_backups/full_backup_base.dump
+docker exec -e PGPASSWORD=postgres123 db-primary pg_restore -U admin_db -d banco_telemetria --data-only -t transacciones /backup_storage/full_backups/full_backup_base.dump
 docker exec -it db-primary psql -U admin_db -d banco_telemetria -c "SELECT count(*) AS total_transacciones FROM transacciones;"
 
 # 8. RESTAURAR INCREMENTAL (MUESTRA 410,000 - 100% RECUPERADO)
