@@ -10,10 +10,10 @@ por cada integrante del equipo, garantizando que nadie modifique el código de
 otro compañero:
 
 - estilo_base.py        -> Sistema de diseño, paleta Slate Navy y helpers comunes.
-- slides_comunes.py     -> Slides 1, 2, 3 (Apertura) y Slides 10, 11 (Cierre).
-- slides_backup.py      -> Slides 4 y 5 (Módulo Backups & PITR) - Zaid San Lucas.
+- slides_comunes.py     -> Slides 1, 2, 3 (Apertura) y Slides 12, 13 (Cierre).
+- slides_backup.py      -> Slides 4 a 8 (Módulo Backups & PITR) - Zaid San Lucas.
 - slides_telemetria.py  -> Slides 6 y 7 (Módulo Telemetría & Loki) - Estudiante 2.
-- slides_optimizacion.py-> Slides 8 y 9 (Módulo Tuning & EXPLAIN) - Estudiante 3.
+- slides_optimizacion.py-> Slides 8 a 11 (Módulo Indexación & EXPLAIN) - Estudiante 3.
 
 Uso:
     python presentacion/generar_presentacion.py
@@ -56,11 +56,11 @@ def compilar_presentacion_completa():
     agregar_slides_telemetria(prs)
 
     # 5. Agregar Módulo 3: Optimización SQL y Benchmarks (Compañero 3)
-    print("-> Integrando Módulo 3: Optimización SQL (Slides 8 y 9)...")
+    print("-> Integrando Módulo 3: Optimización SQL (Slides 8 a 11)...")
     agregar_slides_optimizacion(prs)
 
     # 6. Agregar diapositivas de cierre (Metodología del Laboratorio, Conclusiones)
-    print("-> Integrando Cierre y Metodología (Slides 10 y 11)...")
+    print("-> Integrando Cierre y Metodología (Slides 12 y 13)...")
     agregar_slides_cierre(prs)
 
     # 7. Guardar presentación maestra unificada
