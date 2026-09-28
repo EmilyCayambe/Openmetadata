@@ -181,8 +181,31 @@ def agregar_slides_backup(prs):
     add_structured_item(tf, "recovery_target_lsn:", "Detención en una posición de bytes exacta de LSN para máxima precisión forense.", 12)
     add_structured_item(tf, "Resiliencia Total:", "Garantiza que la empresa no pierda las transacciones del día entre el último backup y el desastre.", 12)
 
+    # --------------------------------------------------------------------------
+    # SLIDE 6 (B6): ECOSISTEMA EMPRESARIAL DE HERRAMIENTAS DE BACKUP
+    # --------------------------------------------------------------------------
+    s6 = create_base_slide(prs, "Soluciones de Gran Escala", "Ecosistema Corporativo: Respaldos Físicos y Continuos")
+
+    add_card(s6, Inches(0.8), Inches(1.65), Inches(5.7), Inches(5.1), "Respaldos Físicos: pg_basebackup")
+    tb = s6.shapes.add_textbox(Inches(1.05), Inches(2.25), Inches(5.2), Inches(4.3))
+    tf = tb.text_frame
+    tf.word_wrap = True
+    add_structured_item(tf, "Copia Binaria Bit a Bit:", "A diferencia de pg_dump que genera sentencias SQL, pg_basebackup copia los bloques reales de datos ($PGDATA) a nivel de páginas de 8KB.", 12)
+    add_structured_item(tf, "Streaming de WALs (-Xs):", "Abre una conexión simultánea que captura en streaming los WALs generados durante la copia para asegurar consistencia.", 12)
+    add_structured_item(tf, "Configuración de Réplicas (-R):", "Genera automáticamente el fichero standby.signal y los parámetros de conexión primaria para levantar réplicas en caliente.", 12)
+    add_structured_item(tf, "Velocidad de Restauración:", "Inmediata; el motor arranca directamente sobre los bloques sin tener que reconstruir esquemas ni reindexar.", 12)
+
+    add_card(s6, Inches(6.8), Inches(1.65), Inches(5.7), Inches(5.1), "Herramientas de Nivel Bancario y Cloud")
+    tb = s6.shapes.add_textbox(Inches(7.05), Inches(2.25), Inches(5.2), Inches(4.3))
+    tf = tb.text_frame
+    tf.word_wrap = True
+    add_structured_item(tf, "pgBackRest (Estándar de la Industria):", "El software más robusto para backups incrementales y diferenciales a nivel de bloque (delta de páginas de 8KB), compresión multihilo LZ4/Zstandard y deduplicación.", 12)
+    add_structured_item(tf, "Barman (Backup & Recovery Manager):", "Desarrollado por EnterpriseDB para la administración remota de catálogos y clusters masivos de bases de datos.", 12)
+    add_structured_item(tf, "WAL-G (Cloud-Native):", "Diseñado para Kubernetes y contenedores; envía respaldos físicos y WALs comprimidos directamente hacia buckets en AWS S3, Google Cloud Storage o Azure Blob.", 12)
+    add_structured_item(tf, "Snapshots de Almacenamiento (SAN/EBS):", "pg_backup_start() y pg_backup_stop() permiten congelar la consistencia y tomar snapshots de disco virtual en segundos.", 12)
+
 if __name__ == "__main__":
-    print(">>> Generando vista previa independiente del MÓDULO BACKUP (5 diapositivas)...")
+    print(">>> Generando vista previa independiente del MÓDULO BACKUP (6 diapositivas)...")
     preview_prs = create_empty_deck()
     agregar_slides_backup(preview_prs)
     preview_path = os.path.join(SCRIPT_DIR, "preview_modulo_backup.pptx")
