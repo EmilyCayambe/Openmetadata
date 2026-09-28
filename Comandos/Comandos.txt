@@ -1,0 +1,133 @@
+================================================================================
+ GUÍA MAESTRA DE COMANDOS: DEMOSTRACIÓN DE BACKUPS, WAL Y PITR
+ Curso: Almacenamiento y Minería de Datos | Expositor: Zaid San Lucas
+================================================================================
+
+DATOS DE CONEXIÓN AL POSTGRESQL DE DOCKER:
+  - Host: localhost
+  - Puerto: 5433  (Mapeado a 5432 del contenedor)
+  - Base de Datos: banco_telemetria
+  - Usuario: admin_db
+  - Contraseña: postgres123
+
+
+--------------------------------------------------------------------------------
+FLUJO 1: REVISIÓN INICIAL DEL ESTADO DE LA BASE DE DATOS
+--------------------------------------------------------------------------------
+1.1 Ver conteo de registros actuales (600,000 filas en total):
+    docker exec -it db-primary psql -U admin_db -d banco_telemetria -c "SELECT 'clientes' as tabla, count(*) FROM clientes UNION ALL SELECT 'cuentas', count(*) FROM cuentas UNION ALL SELECT 'transacciones', count(*) FROM transacciones;"
+
+1.2 Ver el tamaño físico de las tablas en disco:
+    docker exec -it db-primary psql -U admin_db -d banco_telemetria -c "SELECT relname AS tabla, n_live_tup AS filas, pg_size_pretty(pg_total_relation_size(relid)) AS tamano FROM pg_stat_user_tables ORDER BY n_live_tup DESC;"
+
+
+--------------------------------------------------------------------------------
+FLUJO 2: GENERAR EL BACKUP TOTAL (FULL LOGICAL BACKUP)
+--------------------------------------------------------------------------------
+2.1 Ejecutar comando nativo pg_dump (Formato Custom Comprimido -Fc):
+    En PowerShell:
+    docker exec -e PGPASSWORD=postgres123 db-primary pg_dump -U admin_db -d banco_telemetria -F c -b -v -f /backup_storage/full_backups/full_backup_en_vivo.dump
+
+    O mediante el script automatizado:
+    .\scripts\backup_full.ps1
+
+2.2 Verificar el archivo .dump generado en el volumen seguro (pesa ~13 MB):
+    docker exec -it db-primary ls -lh /backup_storage/full_backups/
+
+
+--------------------------------------------------------------------------------
+FLUJO 3: INSERCIÓN DE NUEVAS TRANSACCIONES (CAMBIOS POST-BACKUP)
+--------------------------------------------------------------------------------
+3.1 Simular que entran nuevas transacciones críticas de clientes al banco:
+    docker exec -it db-primary psql -U admin_db -d banco_telemetria -c "
+    INSERT INTO transacciones (cuenta_id, tipo_transaccion, monto, descripcion, estado)
+    VALUES 
+    (1, 'TRANSFERENCIA', 50000.00, 'Transferencia crítica post-backup de cliente VIP', 'COMPLETADO'),
+    (2, 'DEPOSITO', 12000.00, 'Depósito de nómina empresarial de último minuto', 'COMPLETADO');
+    "
+
+3.2 Consultar las transacciones recién ingresadas para mostrarlas al profesor:
+    docker exec -it db-primary psql -U admin_db -d banco_telemetria -c "SELECT * FROM transacciones WHERE descripcion LIKE '%post-backup%' OR descripcion LIKE '%último minuto%';"
+
+
+--------------------------------------------------------------------------------
+FLUJO 4: GENERAR BACKUP INCREMENTAL VÍA WAL (ARCHIVING AUTOMÁTICO)
+--------------------------------------------------------------------------------
+4.1 Verificar que el archivador continuo de PostgreSQL está activo:
+    docker exec -it db-primary psql -U admin_db -d banco_telemetria -c "SHOW archive_mode; SHOW archive_command;"
+
+4.2 Ver estadísticas de archivado (cuántos WALs ha despachado):
+    docker exec -it db-primary psql -U admin_db -d banco_telemetria -c "SELECT archived_count, last_archived_wal, last_archived_time FROM pg_stat_archiver;"
+
+4.3 Forzar rotación de WAL (Backup Incremental en vivo):
+    PostgreSQL sella el archivo actual de 16MB y ejecuta archive_command solo:
+    docker exec -it db-primary psql -U admin_db -d banco_telemetria -c "SELECT pg_switch_wal() AS segmento_wal_cerrado, pg_current_wal_lsn() AS lsn_actual;"
+
+    O mediante el script:
+    .\scripts\backup_wal.ps1
+
+4.4 Verificar los archivos WAL archivados en el almacenamiento de contingencia:
+    docker exec -it db-primary ls -lht /backup_storage/wal_archive | head -n 8
+
+
+--------------------------------------------------------------------------------
+FLUJO 5: INSPECCIONAR REGISTROS WAL EN VIVO CON PG_WALDUMP
+--------------------------------------------------------------------------------
+5.1 Decodificar los eventos internos del último WAL archivado (sin tocar la BD):
+    (Reemplaza el nombre por el último archivo listado en el paso 4.4):
+    docker exec -it db-primary pg_waldump -n 10 /backup_storage/wal_archive/00000001000000000000001D
+
+    * Qué explicar a la audiencia:
+      - 'rmgr': Resource Manager (Heap=tablas, Btree=índices, Transaction=commits).
+      - 'lsn': Log Sequence Number (posición secuencial exacta en bytes).
+      - 'tx': ID correlativo de la transacción.
+
+
+--------------------------------------------------------------------------------
+FLUJO 6: SIMULACIÓN DE DESASTRE (ERROR HUMANO ACCIDENTAL)
+--------------------------------------------------------------------------------
+6.1 Provocar el incidente destructivo en vivo:
+    docker exec -it db-primary psql -U admin_db -d banco_telemetria -c "
+    DROP TABLE IF EXISTS transacciones CASCADE;
+    DROP TABLE IF EXISTS cuentas CASCADE;
+    DROP TABLE IF EXISTS clientes CASCADE;
+    "
+
+6.2 Comprobar que los datos NO existen (mostrar error al público):
+    docker exec -it db-primary psql -U admin_db -d banco_telemetria -c "\dt"
+
+
+--------------------------------------------------------------------------------
+FLUJO 7: RESTAURACIÓN DE CONTINGENCIA (DISASTER RECOVERY)
+--------------------------------------------------------------------------------
+7.1 Ejecutar comando de restauración con pg_restore:
+    docker exec -it -e PGPASSWORD=postgres123 db-primary pg_restore -U admin_db -d banco_telemetria --no-owner -v /backup_storage/full_backups/full_backup_en_vivo.dump
+
+    O mediante el script interactivo:
+    .\scripts\disaster_and_restore.ps1
+
+7.2 Verificar que las 600,000 filas se recuperaron al 100%:
+    docker exec -it db-primary psql -U admin_db -d banco_telemetria -c "SELECT 'clientes' as tabla, count(*) FROM clientes UNION ALL SELECT 'cuentas', count(*) FROM cuentas UNION ALL SELECT 'transacciones', count(*) FROM transacciones;"
+
+
+================================================================================
+PREGUNTA CLAVE DE AUDIENCIA:
+¿SON ESTAS LAS ÚNICAS FORMAS DE HACER BACKUP EN BASES DE DATOS?
+================================================================================
+RESPUESTA TÉCNICA: NO. En la industria existen 4 categorías de backup:
+
+1. RESPALDOS LÓGICOS (Nivel SQL / Esquema):
+   - pg_dump: Respaldo de una base de datos individual en texto plano o binario custom (-F c).
+   - pg_dumpall: Respaldo de TODA la instancia de PostgreSQL (incluye usuarios, contraseñas, roles, tablespaces y todas las bases de datos).
+
+2. RESPALDOS FÍSICOS EN CALIENTE (Nivel Clúster / Bloques de Disco):
+   - pg_basebackup: Herramienta nativa oficial de PostgreSQL. Copia bit a bit los archivos de datos físicos del directorio $PGDATA mientras el motor sigue operando, y abre un canal de streaming para capturar los WALs concurrentes (-X stream). Es la base para configurar réplicas Standby (Streaming Replication).
+
+3. HERRAMIENTAS ENTERPRISE DE BACKUP CONTINUO (Estándar en Bancos / Big Tech):
+   - pgBackRest: La solución líder para backups físicos incrementales y diferenciales a nivel de bloque (delta backups). Permite compresión multihilo (Zstandard/LZ4), cifrado y deduplicación.
+   - Barman (Backup and Recovery Manager): Plataforma para gestión centralizada de múltiples servidores PostgreSQL con archivado remoto y recuperación PITR con 1 comando.
+   - WAL-G: Diseñado para entornos Cloud-Native; comprime y envía los respaldos y WALs directamente hacia buckets de almacenamiento como AWS S3, Google Cloud Storage o Azure Blob.
+
+4. SNAPSHOTS DE ALMACENAMIENTO (Nivel Infraestructura / Storage):
+   - Snapshots a nivel de volumen (AWS EBS, Ceph, SAN, ZFS, LVM).
+   - Se congela el motor brevemente con 'SELECT pg_backup_start();', se toma el snapshot del disco virtual en 2 segundos, y se libera con 'SELECT pg_backup_stop();'.
