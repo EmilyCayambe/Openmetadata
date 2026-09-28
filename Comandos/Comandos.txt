@@ -72,7 +72,9 @@ FLUJO 4: GENERAR BACKUP INCREMENTAL VÍA WAL (ARCHIVING AUTOMÁTICO)
     .\scripts\backup_wal.ps1
 
 4.4 Verificar los archivos WAL archivados en el almacenamiento de contingencia:
-    docker exec -it db-primary ls -lht /backup_storage/wal_archive | head -n 8
+    docker exec -it db-primary sh -c "ls -lht /backup_storage/wal_archive | head -n 8"
+
+    (O en PowerShell nativo: docker exec -it db-primary ls -lht /backup_storage/wal_archive | Select-Object -First 8)
 
 
 --------------------------------------------------------------------------------
