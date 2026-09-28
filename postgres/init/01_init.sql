@@ -96,3 +96,9 @@ BEGIN
     RAISE NOTICE '>>> Poblado exitoso finalizado en: % segundos.', round(extract(epoch from (clock_timestamp() - v_inicio))::numeric, 2);
 END;
 $$ LANGUAGE plpgsql;
+
+-- ===============================================================
+-- POBLADO AUTOMÁTICO AL INICIAR EL CONTENEDOR POR PRIMERA VEZ
+-- ===============================================================
+SELECT poblar_datos_sinteticos(100000);
+
