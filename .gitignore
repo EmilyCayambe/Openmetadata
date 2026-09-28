@@ -1,5 +1,7 @@
 # Archivos pesados de backups locales y previews
 backup_storage/full_backups/*.dump
+backup_storage/incremental_backups/*
+!backup_storage/incremental_backups/.gitkeep
 backup_storage/wal_archive/*
 !backup_storage/wal_archive/.gitkeep
 !backup_storage/full_backups/.gitkeep
