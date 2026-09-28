@@ -1,162 +1,37 @@
-================================================================================
- GUÍA MAESTRA DE COMANDOS: DEMOSTRACIÓN DE BACKUPS, WAL Y PITR
- Curso: Almacenamiento y Minería de Datos | Expositor: Zaid San Lucas
-================================================================================
+# =====================================================================
+# COMANDOS DE DEMOSTRACION EN ORDEN DE EJECUCION
+# =====================================================================
 
-DATOS DE CONEXIÓN AL POSTGRESQL DE DOCKER:
-  - Host: localhost
-  - Puerto: 5433  (Mapeado a 5432 del contenedor)
-  - Base de Datos: banco_telemetria
-  - Usuario: admin_db
-  - Contraseña: postgres123
+# 1. VER CONTEO INICIAL
+docker exec -it db-primary psql -U admin_db -d banco_telemetria -c "SELECT count(*) AS total_transacciones FROM transacciones;"
 
+# 2. GENERAR BACKUP FULL
+docker exec db-primary mkdir -p /backup_storage/full_backups
+docker exec -e PGPASSWORD=postgres123 db-primary pg_dump -U admin_db -d banco_telemetria -F c -b -f /backup_storage/full_backups/full_backup_base.dump
+docker exec -it db-primary ls -lh /backup_storage/full_backups/full_backup_base.dump
 
---------------------------------------------------------------------------------
-FLUJO 1: REVISIÓN INICIAL DEL ESTADO DE LA BASE DE DATOS
---------------------------------------------------------------------------------
-1.1 Ver conteo de registros actuales (600,000 filas en total):
-    docker exec -it db-primary psql -U admin_db -d banco_telemetria -c "SELECT 'clientes' as tabla, count(*) FROM clientes UNION ALL SELECT 'cuentas', count(*) FROM cuentas UNION ALL SELECT 'transacciones', count(*) FROM transacciones;"
+# 3. INSERTAR 10,000 TRANSACCIONES NUEVAS (POST-BACKUP)
+docker exec -it db-primary psql -U admin_db -d banco_telemetria -c "INSERT INTO transacciones (cuenta_id, tipo_transaccion, monto, descripcion, estado) SELECT floor(random() * 90000 + 100001)::INT, (ARRAY['TRANSFERENCIA','DEPOSITO','RETIRO','PAGO'])[floor(random()*4)+1], round((random() * 2500 + 10)::numeric, 2), 'Transaccion critica post-backup #' || s, 'COMPLETADO' FROM generate_series(1, 10000) AS s;"
+docker exec -it db-primary psql -U admin_db -d banco_telemetria -c "SELECT count(*) AS total_transacciones FROM transacciones;"
 
-1.2 Ver el tamaño físico de las tablas en disco:
-    docker exec -it db-primary psql -U admin_db -d banco_telemetria -c "SELECT relname AS tabla, n_live_tup AS filas, pg_size_pretty(pg_total_relation_size(relid)) AS tamano FROM pg_stat_user_tables ORDER BY n_live_tup DESC;"
+# 4. GENERAR BACKUP INCREMENTAL (DELTA) Y SELLAR WAL
+docker exec db-primary mkdir -p /backup_storage/incremental_backups
+docker exec db-primary chmod 777 /backup_storage/incremental_backups
+docker exec -e PGPASSWORD=postgres123 db-primary psql -U admin_db -d banco_telemetria -c "COPY (SELECT * FROM transacciones WHERE descripcion LIKE 'Transaccion critica post-backup%') TO '/backup_storage/incremental_backups/backup_diferencial.sql';"
+docker exec -it db-primary psql -U admin_db -d banco_telemetria -c "SELECT pg_switch_wal();"
+docker exec -it db-primary ls -lh /backup_storage/full_backups/full_backup_base.dump /backup_storage/incremental_backups/backup_diferencial.sql
 
+# 5. VER WAL EN VIVO
+docker exec -it db-primary ls -lht /backup_storage/wal_archive
 
---------------------------------------------------------------------------------
-FLUJO 2: GENERAR EL BACKUP TOTAL (FULL LOGICAL BACKUP)
---------------------------------------------------------------------------------
-2.1 Ejecutar comando nativo pg_dump (Formato Custom Comprimido -Fc):
-    En PowerShell:
-    docker exec -e PGPASSWORD=postgres123 db-primary pg_dump -U admin_db -d banco_telemetria -F c -b -v -f /backup_storage/full_backups/full_backup_en_vivo.dump
+# 6. CAUSAR DESASTRE (BORRAR TABLA)
+docker exec -e PGPASSWORD=postgres123 db-primary psql -U admin_db -d banco_telemetria -c "DROP TABLE transacciones CASCADE;"
+docker exec -it db-primary psql -U admin_db -d banco_telemetria -c "SELECT count(*) FROM transacciones;"
 
-    O mediante el script automatizado:
-    .\scripts\backup_full.ps1
+# 7. RESTAURAR SOLO FULL (MUESTRA 400,000 - FALTAN 10,000)
+docker exec -e PGPASSWORD=postgres123 db-primary pg_restore -U admin_db -d banco_telemetria -t transacciones /backup_storage/full_backups/full_backup_base.dump
+docker exec -it db-primary psql -U admin_db -d banco_telemetria -c "SELECT count(*) AS total_transacciones FROM transacciones;"
 
-2.2 Verificar el archivo .dump generado en el volumen seguro (pesa ~13 MB):
-    docker exec -it db-primary ls -lh /backup_storage/full_backups/
-
-
---------------------------------------------------------------------------------
-FLUJO 3: INSERCIÓN MASIVA DE TRANSACCIONES SINTÉTICAS (POST-BACKUP)
---------------------------------------------------------------------------------
-3.1 Inyectar 10,000 nuevas transacciones sintéticas en 0.5 segundos:
-    (Eleva el contador de transacciones de 400,000 a 410,000)
-    docker exec -it db-primary psql -U admin_db -d banco_telemetria -c "
-    INSERT INTO transacciones (cuenta_id, tipo_transaccion, monto, descripcion, estado)
-    SELECT
-        floor(random() * 1000 + 1)::INT,
-        (ARRAY['TRANSFERENCIA','DEPOSITO','RETIRO','PAGO'])[floor(random()*4)+1],
-        round((random() * 2500 + 10)::numeric, 2),
-        'Transacción sintética post-backup #' || s,
-        'COMPLETADO'
-    FROM generate_series(1, 10000) AS s;
-    "
-
-3.2 Verificar que el total de transacciones subió exactamente a 410,000:
-    docker exec -it db-primary psql -U admin_db -d banco_telemetria -c "SELECT count(*) AS total_transacciones FROM transacciones;"
-
-
---------------------------------------------------------------------------------
-FLUJO 4: GENERAR BACKUP INCREMENTAL VÍA WAL (ARCHIVING AUTOMÁTICO)
---------------------------------------------------------------------------------
-4.1 Verificar que el archivador continuo de PostgreSQL está activo:
-    docker exec -it db-primary psql -U admin_db -d banco_telemetria -c "SHOW archive_mode; SHOW archive_command;"
-
-4.2 Ver estadísticas de archivado (cuántos WALs ha despachado):
-    docker exec -it db-primary psql -U admin_db -d banco_telemetria -c "SELECT archived_count, last_archived_wal, last_archived_time FROM pg_stat_archiver;"
-
-4.3 Forzar rotación de WAL (Backup Incremental en vivo):
-    PostgreSQL sella el archivo actual de 16MB y ejecuta archive_command solo:
-    docker exec -it db-primary psql -U admin_db -d banco_telemetria -c "SELECT pg_switch_wal() AS segmento_wal_cerrado, pg_current_wal_lsn() AS lsn_actual;"
-
-    O mediante el script:
-    .\scripts\backup_wal.ps1
-
-4.4 Verificar los archivos WAL archivados en el almacenamiento de contingencia:
-    docker exec -it db-primary sh -c "ls -lht /backup_storage/wal_archive | head -n 8"
-
-    (O en PowerShell nativo: docker exec -it db-primary ls -lht /backup_storage/wal_archive | Select-Object -First 8)
-
-
---------------------------------------------------------------------------------
-FLUJO 5: INSPECCIONAR REGISTROS WAL EN VIVO CON PG_WALDUMP
---------------------------------------------------------------------------------
-5.1 Decodificar los eventos internos del último WAL archivado (sin tocar la BD):
-    (Reemplaza el nombre por el último archivo listado en el paso 4.4):
-    docker exec -it db-primary pg_waldump -n 10 /backup_storage/wal_archive/00000001000000000000001D
-
-    * Qué explicar a la audiencia:
-      - 'rmgr': Resource Manager (Heap=tablas, Btree=índices, Transaction=commits).
-      - 'lsn': Log Sequence Number (posición secuencial exacta en bytes).
-      - 'tx': ID correlativo de la transacción.
-
-
---------------------------------------------------------------------------------
-FLUJO 6: SIMULACIÓN DE DESASTRE (ERROR HUMANO ACCIDENTAL)
---------------------------------------------------------------------------------
-6.1 Provocar el incidente destructivo en vivo:
-    docker exec -it db-primary psql -U admin_db -d banco_telemetria -c "
-    DROP TABLE IF EXISTS transacciones CASCADE;
-    DROP TABLE IF EXISTS cuentas CASCADE;
-    DROP TABLE IF EXISTS clientes CASCADE;
-    "
-
-6.2 Comprobar que los datos NO existen (mostrar error al público):
-    docker exec -it db-primary psql -U admin_db -d banco_telemetria -c "\dt"
-
-
---------------------------------------------------------------------------------
-FLUJO 7: RESTAURACIÓN DE CONTINGENCIA (DISASTER RECOVERY)
---------------------------------------------------------------------------------
-7.1 Ejecutar comando de restauración con pg_restore:
-    docker exec -it -e PGPASSWORD=postgres123 db-primary pg_restore -U admin_db -d banco_telemetria --no-owner -v /backup_storage/full_backups/full_backup_en_vivo.dump
-
-    O mediante el script interactivo:
-    .\scripts\disaster_and_restore.ps1
-
-7.2 Verificar que las 600,000 filas se recuperaron al 100%:
-    docker exec -it db-primary psql -U admin_db -d banco_telemetria -c "SELECT 'clientes' as tabla, count(*) FROM clientes UNION ALL SELECT 'cuentas', count(*) FROM cuentas UNION ALL SELECT 'transacciones', count(*) FROM transacciones;"
-
-
-================================================================================
-PREGUNTA CLAVE DE AUDIENCIA:
-¿SON ESTAS LAS ÚNICAS FORMAS DE HACER BACKUP EN BASES DE DATOS?
-================================================================================
-RESPUESTA TÉCNICA: NO. En la industria existen 4 categorías de backup:
-
-1. RESPALDOS LÓGICOS (Nivel SQL / Esquema):
-   - pg_dump: Respaldo de una base de datos individual en formato custom (-F c).
-     Comando: pg_dump -U admin_db -d banco_telemetria -F c -b -v -f /backup/db.dump
-   - pg_dumpall: Respaldo de TODA la instancia de PostgreSQL (roles, contraseñas, tablespaces y todas las bases).
-     Comando: pg_dumpall -U postgres -f /backup/instancia_completa.sql
-
-2. RESPALDOS FÍSICOS EN CALIENTE (Nivel Clúster / Bloques de Disco):
-   - pg_basebackup: Herramienta nativa oficial de PostgreSQL. Copia bit a bit los bloques de datos físicos ($PGDATA)
-     mientras el motor sigue en producción, y abre un canal de streaming para capturar los WALs concurrentes (-X stream).
-     Comando:
-     pg_basebackup -h localhost -p 5432 -U admin_db -D /backup/base_fisica -Fp -Xs -P -R
-     * Banderas clave:
-       -Fp: Formato plano (directorio réplica idéntico a $PGDATA).
-       -Xs: Captura los WALs generados durante la copia por streaming.
-       -P: Barra de progreso.
-       -R: Escribe automáticamente la configuración de replicación Standby.
-
-3. HERRAMIENTAS ENTERPRISE DE BACKUP CONTINUO (Estándar en Bancos / Big Tech):
-   - pgBackRest: La solución líder para backups físicos incrementales y diferenciales a nivel de bloque (delta de páginas de 8KB).
-     Comando de Backup Total:         pgbackrest --stanza=demo --type=full backup
-     Comando de Backup Diferencial:   pgbackrest --stanza=demo --type=diff backup
-     Comando de Backup Incremental:   pgbackrest --stanza=demo --type=incr backup
-     Comando de Restauración PITR:    pgbackrest --stanza=demo --type=time "--target=2026-09-27 22:00:00" restore
-     * Ventajas: Deduplicación, compresión multihilo (Zstandard/LZ4), cifrado y verificación de checksums.
-   - Barman (Backup and Recovery Manager): Gestión centralizada de múltiples servidores PostgreSQL remotos con PITR en 1 comando.
-     Comando: barman backup servidor_produccion
-     Comando: barman recover servidor_produccion <ID_BACKUP> /var/lib/postgresql/data
-   - WAL-G: Diseñado para arquitecturas Cloud-Native (Kubernetes); envía y comprime los respaldos y WALs directamente hacia buckets:
-     Comando: wal-g backup-push /var/lib/postgresql/data  (Hacia AWS S3 / Google Cloud / Azure)
-     Comando: wal-g backup-fetch /var/lib/postgresql/data LATEST
-
-4. SNAPSHOTS DE ALMACENAMIENTO (Nivel Infraestructura / Storage):
-   - Snapshots a nivel de volumen (AWS EBS, Ceph, SAN, ZFS, LVM).
-   - Flujo:
-     1. SELECT pg_backup_start('snapshot_ebs', false);   (Pone a PostgreSQL en modo backup consistente)
-     2. Tomar el snapshot del volumen de disco en la nube (AWS / Azure) en 2 segundos.
-     3. SELECT pg_backup_stop();                         (Libera el motor y archiva el WAL de cierre)
+# 8. RESTAURAR INCREMENTAL (MUESTRA 410,000 - 100% RECUPERADO)
+docker exec -e PGPASSWORD=postgres123 db-primary psql -U admin_db -d banco_telemetria -c "COPY transacciones FROM '/backup_storage/incremental_backups/backup_diferencial.sql';"
+docker exec -it db-primary psql -U admin_db -d banco_telemetria -c "SELECT count(*) AS total_transacciones FROM transacciones;"
