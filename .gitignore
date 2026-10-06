@@ -1,10 +1,4 @@
-# Archivos pesados de backups locales y previews
-backup_storage/full_backups/*.dump
-backup_storage/incremental_backups/*
-!backup_storage/incremental_backups/.gitkeep
-backup_storage/wal_archive/*
-!backup_storage/wal_archive/.gitkeep
-!backup_storage/full_backups/.gitkeep
+# Presentaciones temporales
 presentacion/preview_*.pptx
 presentacion/*_preview.pptx
 presentacion/~$*.pptx
@@ -12,6 +6,19 @@ presentacion/~$*.pptx
 # Datos de contenedores y logs locales
 *.log
 .env
+**/.env
+.env.*
+!.env.example
+**/.env.*
+!**/.env.example
+openmetadata/docker-volume/
+backup_storage/
+*.dump
+*.backup
+
+# Entornos y cachés de Python
+.venv/
+venv/
 __pycache__/
 *.pyc
 

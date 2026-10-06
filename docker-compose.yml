@@ -7,12 +7,11 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-admin_db}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres123}
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - ./postgres/init:/docker-entrypoint-initdb.d:ro
       - ./postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
       - pgdata:/var/lib/postgresql/data
-      - ./backup_storage:/backup_storage
     command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
     networks:
       - db-network
@@ -22,7 +21,7 @@ services:
     image: grafana/loki:3.0.0
     container_name: loki-server
     ports:
-      - "3100:3100"
+      - "127.0.0.1:3100:3100"
     volumes:
       - ./telemetry/loki-config.yaml:/etc/loki/local-config.yaml:ro
       - lokidata:/loki
@@ -49,7 +48,7 @@ services:
     image: grafana/grafana:10.4.1
     container_name: grafana-dashboard
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
@@ -66,6 +65,7 @@ services:
 
 networks:
   db-network:
+    name: ai-db-lab-network
     driver: bridge
 
 volumes:

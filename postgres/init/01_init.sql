@@ -38,6 +38,13 @@ CREATE TABLE IF NOT EXISTS transacciones (
     estado VARCHAR(20) NOT NULL DEFAULT 'COMPLETADO' -- 'COMPLETADO', 'PENDIENTE', 'RECHAZADO'
 );
 
+COMMENT ON TABLE transacciones IS
+    'Registro de operaciones financieras asociadas a cuentas; se consulta por cuenta y fecha.';
+COMMENT ON COLUMN transacciones.cuenta_id IS
+    'Cuenta que originó la operación; filtro de igualdad frecuente en consultas de historial.';
+COMMENT ON COLUMN transacciones.fecha_hora IS
+    'Fecha y hora de la operación; se usa para filtrar rangos y ordenar historiales.';
+
 -- ===============================================================
 -- FUNCIÓN: poblar_datos_sinteticos(n_clientes INT)
 -- Genera datos realistas en masa de forma ultrarrápida usando generate_series()
