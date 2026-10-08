@@ -152,7 +152,7 @@ def agregar_slides_diagnostico_ia(prs):
             ("1. Evidencia:", "El agente obtiene plan real con EXPLAIN JSON."),
             ("2. Contexto:", "Consulta FQN, columnas, descripción y tags por API."),
             ("3. Análisis:", "Ollama/OpenAI devuelve una hipótesis contrastable."),
-            ("4. Gobierno:", "DBA/MSP aprueba, prueba y mide el índice."),
+            ("4. Gobierno:", "DBA/MSP revisa y autoriza las pruebas o cambios."),
         ],
     )
 
@@ -197,13 +197,13 @@ def agregar_slides_diagnostico_ia(prs):
             ("Entorno:", "Docker Compose; PostgreSQL 16 y datos sintéticos existentes."),
             ("Tabla:", "transacciones, con cientos de miles de filas en volumen inicial."),
             ("Consulta:", "Historial de una cuenta con filtro temporal, orden y límite."),
-            ("Medición:", "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)."),
+            ("Medición:", "EXPLAIN JSON, cinco muestras por escenario."),
         ],
         "Consulta del experimento",
         [
             ("Filtro:", "cuenta_id = 1520 y fecha_hora desde 2024-01-01."),
-            ("Problema buscado:", "Recorrido amplio y trabajo de ordenamiento."),
-            ("Salida al agente:", "Plan JSON y columnas leídas desde information_schema."),
+            ("Observación:", "El modelo identifica cuellos desde el plan, sin solución sugerida."),
+            ("Salida al agente:", "Plan JSON, columnas e índices actuales."),
             ("Cautela:", "ANALYZE ejecuta la consulta; no usar a ciegas en producción."),
         ],
     )
@@ -211,20 +211,20 @@ def agregar_slides_diagnostico_ia(prs):
     _add_two_cards(
         prs,
         "07 · Recomendación y verificación",
-        "Del diagnóstico a una mejora medida",
+        "Del diagnóstico a una hipótesis verificable",
         "Agente IA",
         [
-            ("Entrada:", "SQL, plan observado y columnas reales de la tabla."),
+            ("Entrada:", "SQL, plan, esquema e índices actuales."),
             ("Diagnóstico:", "Explica el cuello con evidencia, no solo con intuición."),
-            ("DDL candidato:", "CREATE INDEX ON transacciones (cuenta_id, fecha_hora DESC)."),
-            ("Reescritura:", "Propone alternativas solo si preservan el resultado."),
+            ("Estrategias:", "Propone alternativas justificadas o recomienda no cambiar."),
+            ("Límites:", "Declara evidencia faltante y beneficios/riesgos esperados."),
         ],
         "Validación humana",
         [
-            ("Comparar:", "Nodos del plan, filas, buffers y mediana de ejecución."),
-            ("Revisar costo:", "Espacio, escritura adicional, mantenimiento y bloqueos."),
-            ("Aplicar:", "El lab ejecuta un DDL fijo; nunca SQL libre de la IA."),
-            ("Operar:", "Desplegar con aprobación, monitorizar y tener rollback."),
+            ("Contrastar:", "Verificar la recomendación con el plan y los índices reales."),
+            ("Probar:", "Tres candidatos predefinidos en copias temporales."),
+            ("Medir:", "Calienta y alterna: compara filas, buffers y medianas."),
+            ("Límite:", "El índice temporal se elimina; prueba solo en laboratorio."),
         ],
     )
 
@@ -252,9 +252,9 @@ def agregar_slides_diagnostico_ia(prs):
             (
                 "Verificar",
                 [
-                    ("Comando:", "py .\\scripts\\ai_db_tuning.py --use-openmetadata --apply-demo-index"),
-                    ("Contrastar:", "Plan posterior, buffers y tiempo mediano."),
-                    ("Cerrar:", "MSP formaliza aprobación, SLO y aprendizaje."),
+                    ("Hipótesis:", "El modelo sugirió un índice sobre cuenta_id."),
+                    ("Resultado:", "Misma salida; mediana observada: 8,905 a 0,085 ms."),
+                    ("Cautela:", "Lecturas locales 1.906 a 6; resultado no garantizado."),
                 ],
             ),
         ],
@@ -288,5 +288,5 @@ def agregar_slides_diagnostico_ia(prs):
 if __name__ == "__main__":
     preview = create_empty_deck()
     agregar_slides_diagnostico_ia(preview)
-    output = "Presentacion_Diagnostico_IA_OpenMetadata_MSP.pptx"
+    output = "Presentacion_Diagnostico_IA_OpenMetadata_MSP_Final.pptx"
     save_deck_safe(preview, output)

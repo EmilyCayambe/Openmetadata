@@ -4,7 +4,7 @@ Guía para exposición y laboratorio local con PostgreSQL 16, Promtail, Loki, Gr
 
 ## Objetivos de la exposición
 
-Al finalizar, la audiencia podrá explicar por qué el tuning reactivo es costoso, qué señales puede analizar un asistente de IA, qué contexto añade un catálogo como OpenMetadata y cómo un MSP convierte los hallazgos en operación gobernada. En el laboratorio se observará un plan de PostgreSQL, se pedirá un diagnóstico a un modelo y se comparará el plan después de crear un índice revisado.
+Al finalizar, la audiencia podrá explicar por qué el tuning reactivo es costoso, qué señales puede analizar un asistente de IA, qué contexto añade un catálogo como OpenMetadata y cómo un MSP convierte los hallazgos en operación gobernada. En el laboratorio se observará un plan de PostgreSQL, se pedirá a un modelo un diagnóstico ciego y, si hay tiempo y recursos, se comparará una hipótesis de índice sobre una copia temporal, sin modificar el esquema original.
 
 ## Parte 1: estructura y guion de presentación
 
@@ -90,9 +90,9 @@ PostgreSQL 16 -- logs --> Promtail --> Loki --> Grafana
 Agente Python <-- API de OpenMetadata 2.0.3 <-- ingesta PostgreSQL
    |                 (esquema, columnas, descripción, tags)
    v
-Ollama / OpenAI --> diagnóstico y DDL candidato
+Ollama / OpenAI --> diagnóstico y estrategias candidatas
    |
-Revisión MSP/DBA --> índice fijo de laboratorio --> nuevo EXPLAIN
+Revisión MSP/DBA --> validación controlada antes de cualquier cambio
 ```
 
 ### 2. Requisitos y puesta en marcha
@@ -157,14 +157,14 @@ Usa el bot integrado `IngestionBot`: abre **Settings → Bots → IngestionBot**
 ```powershell
 $env:AI_PROVIDER = "ollama"
 $env:OLLAMA_MODEL = "llama3.1:latest"
-$env:OLLAMA_NUM_PREDICT = "512"
+$env:OLLAMA_NUM_PREDICT = "768"
 $env:AI_TIMEOUT_SECONDS = "300"
 $env:OPENMETADATA_URL = "http://localhost:8585/api"
 $env:OPENMETADATA_TABLE_FQN = "postgresql_demo.banco_telemetria.public.transacciones"
 $env:OPENMETADATA_JWT_TOKEN = (Get-Clipboard -Raw).Trim()
 ```
 
-La variable queda solo en esa sesión. No publiques el token ni lo incluyas en capturas y revócalo tras la demo.
+La variable queda solo en esa sesión. Pulsa el botón de copiar del token en OpenMetadata antes de ejecutar la asignación; el portapapeles debe contener únicamente el JWT, no las instrucciones de PowerShell. No publiques el token ni lo incluyas en capturas y revócalo tras la demo.
 
 `OLLAMA_NUM_PREDICT` limita la respuesta para reducir el tiempo de inferencia; `AI_TIMEOUT_SECONDS` amplía la espera para modelos locales. Si la respuesta aún tarda demasiado, prueba un modelo más pequeño, por ejemplo `llama3.2:3b`.
 
@@ -178,15 +178,15 @@ $env:OPENAI_MODEL = "gpt-4o-mini"
 
 La clave es un secreto: no la incluyas en el repositorio, una diapositiva ni una captura. En producción se usaría un gestor de secretos.
 
-### 5. Consulta deliberadamente costosa y telemetría
+### 5. Consulta de diagnóstico y telemetría
 
-El caso del script consulta el historial de una cuenta y ordena por fecha. El laboratorio elimina solo el índice con nombre reservado `idx_ai_demo_transacciones_cuenta_fecha`, obtiene un plan inicial y solicita análisis al modelo. Para observarlo manualmente:
+El caso del script consulta el historial de una cuenta y ordena por fecha. El agente mide el plan real y lo envía al modelo sin prescribir un índice ni otra solución. Para observar el plan manualmente:
 
 ```powershell
 docker exec db-primary psql -U admin_db -d banco_telemetria -c "EXPLAIN (ANALYZE, BUFFERS, COSTS, FORMAT TEXT) SELECT transaccion_id, tipo_transaccion, monto, fecha_hora, estado FROM transacciones WHERE cuenta_id = 1520 AND fecha_hora >= TIMESTAMP '2024-01-01 00:00:00' ORDER BY fecha_hora DESC LIMIT 20;"
 ```
 
-La ausencia del índice hace probable un `Seq Scan`; al haber pocas filas por cuenta, el nodo de ordenamiento puede ser pequeño o el optimizador podría elegir otra estrategia. No prometas tiempos absolutos: dependen de CPU, almacenamiento, caché y tamaño real. Lo que se contrasta es el plan, las filas y los buffers, además del tiempo.
+El resultado puede ser un `Seq Scan` u otra estrategia según estadísticas, índices presentes, distribución y costo estimado. No prometas tiempos absolutos: dependen de CPU, almacenamiento, caché y tamaño real. El análisis debe distinguir las filas estimadas/reales, buffers y tiempo, y no concluir que falta un índice solo por observar un `Seq Scan`.
 
 El logging actual registra todas las consultas y duraciones (`log_statement = 'all'`, `log_min_duration_statement = 0`), lo que sirve para una demo pero genera mucho volumen y puede exponer parámetros. No es una configuración recomendada para producción. Las métricas del sistema (CPU/RAM/I/O) no están actualmente exportadas por Prometheus en este proyecto; Grafana consulta logs de Loki, no métricas nativas.
 
@@ -200,13 +200,13 @@ Ejecuta primero el análisis, sin aplicar cambios:
 py .\scripts\ai_db_tuning.py --use-openmetadata --provider ollama
 ```
 
-Para la comparación completa, permite que el script cree el índice **fijo y predefinido para esta demo**, no el DDL devuelto por la IA:
+Si OpenMetadata no está disponible, omite `--use-openmetadata`; el agente obtendrá las columnas directamente de `information_schema` y seguirá consultando los índices actuales:
 
 ```powershell
-py .\scripts\ai_db_tuning.py --use-openmetadata --provider ollama --apply-demo-index
+py .\scripts\ai_db_tuning.py --provider ollama
 ```
 
-El script imprime el plan de entrada, la recomendación del modelo y el plan final. La consulta y el DDL se limitan a objetos del laboratorio. La IA nunca ejecuta SQL generado. Revisa el índice y su efecto antes de considerar cualquier uso fuera de este entorno.
+El diagnóstico ciego propone estrategias según la evidencia y puede recomendar no cambiar nada. Recibe el esquema catalogado y el inventario actual de índices consultado en PostgreSQL, pero no la frecuencia de la consulta, la carga completa ni la distribución detallada de datos; debe declarar esos límites. Un `Seq Scan` por sí solo no demuestra que falte un índice. El programa exige una respuesta JSON estructurada, presenta cinco mediciones iniciales y contrasta que el modelo haya considerado los nombres exactos de los índices existentes. Si no cumple el formato o no se puede verificar su respuesta, muestra un error o una advertencia; no modifica la base.
 
 ### 7. Verificación e interpretación
 
@@ -216,26 +216,45 @@ Compara en la salida:
 - `Seq Scan`/`Index Scan` y presencia de `Sort`: estrategia elegida, no una meta en sí misma.
 - `Buffers: shared hit/read`: páginas servidas desde caché o leídas durante el plan.
 - `rows` estimadas frente a reales: diferencia persistente puede señalar estadísticas o distribución inesperada.
+- Cinco mediciones iniciales: mediana y rango para evitar basarse en una única ejecución.
 
-Con el índice compuesto se espera limitar el recorrido por `cuenta_id` y entregar las filas ya ordenadas por `fecha_hora`. La mejora depende de selectividad y volumen. Un índice acelera lecturas compatibles, pero ocupa almacenamiento y añade trabajo a `INSERT`, `UPDATE` y `DELETE`. La consulta puede devolver pocas filas y el tiempo absoluto ser muy pequeño; en ese caso, el cambio de plan y buffers es la evidencia más didáctica.
-
-El índice de demo puede quitarse al terminar:
+Si el modelo recomienda una estrategia, considérala una hipótesis. El experimento didáctico acepta solo tres candidatos predefinidos (`cuenta_id`, `fecha_hora` o `cuenta_id_fecha_hora`); no ejecuta SQL/DDL generado por el modelo. Tras revisar el diagnóstico, en una segunda ejecución se puede probar una alternativa en una copia temporal:
 
 ```powershell
-docker exec db-primary psql -U admin_db -d banco_telemetria -c "DROP INDEX IF EXISTS idx_ai_demo_transacciones_cuenta_fecha;"
+py .\scripts\ai_db_tuning.py --use-openmetadata --provider ollama --experiment-index fecha_hora --confirm-experiment
 ```
+
+Escribe `EXPERIMENTAR` cuando el programa lo solicite. Para evaluar el índice compuesto usa `cuenta_id_fecha_hora` en lugar de `fecha_hora`. El modo experimental usa la hipótesis elegida anteriormente y no vuelve a consultar al modelo, evitando que un timeout de Ollama impida la comparación; con `--use-openmetadata` aún necesita acceso al catálogo. El programa crea dos copias consistentes de la tabla dentro de una transacción `REPEATABLE READ`, conserva los índices actuales y agrega el candidato solo a la copia correspondiente. Calienta ambos escenarios y alterna cinco mediciones por lado. La salida compara planes, scans de índices, filas, buffers locales/compartidos, medianas/rangos, el delta porcentual y una huella de resultados, e incluye un resumen legible. Un delta negativo significa menor tiempo mediano en esta consulta, no garantiza beneficio global. La transacción elimina las dos copias al completarse; la tabla original no recibe DDL.
+
+En el diagnóstico compartido, la primera recomendación concreta fue un índice simple en `cuenta_id`; para probar exactamente esa sugerencia, usa `cuenta_id` como valor de `--experiment-index`. La afirmación del modelo de que faltan “índices adicionales” no es correcta como dato: el programa consultó PostgreSQL y recibió el inventario completo de índices existentes (en tu salida, solo `transacciones_pkey`). La recomendación sigue siendo una hipótesis; al ejecutar el experimento comprueba también si el índice cambia el plan y los tiempos.
+
+Esto **no es una prueba de producción**: la copia lee toda la tabla y consume recursos del mismo servidor; los tiempos pueden reflejar caché y carga concurrente. Hazlo solo en el laboratorio local desocupado. Una mejora en esta consulta no prueba mejora global; quedan por evaluar carga real, escrituras, espacio, concurrencia y reversa antes de cualquier cambio permanente.
+
+#### Repetir la prueba en otra sesión
+
+Para repetir mañana la hipótesis ya elegida no hace falta volver a consultar al modelo ni repetir cambios de esquema. Abre una terminal PowerShell nueva y ejecuta:
+
+```powershell
+cd "C:\Users\thaiz\Downloads\bk_telemetria_opt_bd"
+docker compose up -d db-primary
+docker compose ps db-primary
+py .\scripts\ai_db_tuning.py --experiment-index cuenta_id --confirm-experiment
+```
+
+Escribe `EXPERIMENTAR` para iniciar. Esta ejecución no necesita `--use-openmetadata`, JWT ni una llamada a Ollama; el valor `cuenta_id` repite de forma explícita la hipótesis que se escogió del diagnóstico anterior. PostgreSQL debe estar iniciado y conservar la base en su volumen Docker `pgdata`. No ejecutes `docker compose down -v` ni elimines ese volumen si quieres reutilizar los mismos datos. No hay que quitar ningún índice después: solo se crea sobre una tabla temporal que se elimina al cerrar la transacción.
+
+La respuesta del modelo no está garantizada si se vuelve a solicitar; puede variar o volver a exceder el tiempo límite. Asimismo, aunque se mantengan los datos, los tiempos exactos pueden cambiar por la carga de la computadora, caché o estado del servidor. En la prueba de hoy la mediana fue 8,905 ms sin índice y 0,085 ms con el candidato; se mantuvieron los resultados, el plan pasó de `Seq Scan` a `Index Scan`, las lecturas locales bajaron de 1.906 a 6 y permaneció `Sort`. Usa estas cifras como registro de la ejecución, no como resultado garantizado para mañana.
 
 ### 8. Guion minucioso de demostración en vivo
 
-1. **Presentar el problema.** Di: “No vamos a pedirle a la IA que adivine; le daremos un plan real y el esquema observado. Primero medimos, luego revisamos una recomendación y finalmente medimos otra vez”.
+1. **Presentar el problema.** Di: “No vamos a pedirle a la IA que adivine ni le daremos la respuesta. Le proporcionaremos un plan real, el esquema y los índices actuales; después evaluaremos críticamente sus hipótesis”.
 2. **Comprobar el laboratorio.** Ejecuta `docker compose ps` y el conteo de transacciones. Señala PostgreSQL y la arquitectura existente de logs en Grafana.
 3. **Mostrar OpenMetadata.** Enseña el servicio `postgresql_demo` y el FQN de `transacciones`; la descripción/tag es el contexto semántico.
 4. **Mostrar el estado inicial.** Ejecuta `py .\scripts\ai_db_tuning.py --use-openmetadata --provider ollama`. Busca `Seq Scan`, filas descartadas, buffers y tiempo en ms.
-5. **Solicitar diagnóstico.** Contrasta la recomendación con el plan. La IA es asistente; no reemplaza al DBA ni el optimizador.
-6. **Aplicar solo el cambio revisado.** Ejecuta `py .\scripts\ai_db_tuning.py --use-openmetadata --provider ollama --apply-demo-index`. El DDL es fijo y conocido, no texto libre generado.
-7. **Comparar.** Observa el nuevo nodo, el `Sort` si desaparece y los buffers/tiempo. Di: “La mejora no es solo el número de milisegundos: verificamos el plan y el costo de recursos; en producción también mediríamos escrituras, tamaño y latencia bajo carga”.
-8. **Conectar con MSP.** Relaciona alerta, diagnóstico, aprobación, ventana de cambio, SLA/SLO y rollback. Grafana, OpenMetadata y el agente demuestran capas distintas del flujo; la aprobación operativa se representa en el guion.
-9. **Cerrar con límites.** Recuerda que `EXPLAIN ANALYZE` ejecuta la consulta, que el modelo puede equivocarse, que un índice tiene costo y que no se deben enviar datos sensibles sin autorización.
+5. **Solicitar diagnóstico.** Lee las estrategias candidatas y la evidencia faltante. Contrástalas con el plan y el inventario real de índices; la IA puede equivocarse y no reemplaza al DBA ni al optimizador.
+6. **Probar la hipótesis (opcional).** En el laboratorio local desocupado, ejecuta el modo experimental con una opción permitida y confirma escribiendo `EXPERIMENTAR`. Compara plan, filas, buffers, mediana y rango; recalca que la copia es temporal y la carga real aún debe probarse en staging.
+7. **Conectar con MSP.** Relaciona alerta, diagnóstico, aprobación, ventana de cambio, SLA/SLO y rollback. Grafana, OpenMetadata y el agente demuestran capas distintas del flujo.
+8. **Cerrar con límites.** Recuerda que `EXPLAIN ANALYZE` ejecuta la consulta, que el modelo puede equivocarse y que no se deben enviar datos sensibles sin autorización.
 
 ### Recuperación si Ollama falla por CUDA en Windows
 
@@ -254,6 +273,6 @@ Deja esa ventana abierta. En otra PowerShell configura `AI_TIMEOUT_SECONDS=900` 
 
 **¿OpenMetadata optimiza consultas?** No. Cataloga y ofrece metadatos/linaje/gobierno. PostgreSQL planifica y ejecuta; herramientas de observabilidad y un agente separado analizan.
 
-**¿Por qué no aplicar automáticamente el índice?** Porque el modelo no conoce todo el impacto operacional; hay que validar bloqueo, espacio, escrituras, concurrencia, redundancia y rollback.
+**¿Por qué el agente no aplica automáticamente una recomendación?** Porque el modelo no conoce todo el impacto operacional. El modo opcional solo mide candidatos predefinidos en una copia temporal; bloqueos, espacio, escrituras, concurrencia, redundancia y rollback aún deben evaluarse por el DBA/MSP.
 
-**¿Qué está implementado y qué hay que preparar?** El repositorio incluye el Compose oficial de OpenMetadata 2.0.3, el cliente API del agente y la telemetría PostgreSQL→Promtail→Loki→Grafana. Para una sesión nueva hay que iniciar ambos Compose, crear el servicio PostgreSQL y ejecutar su primera ingesta; el modo IA de catálogo requiere un JWT local. Este laboratorio no exporta métricas nativas de CPU/RAM ni despliega un MSP: el rol MSP se demuestra con la aprobación y verificación del cambio.
+**¿Qué está implementado y qué hay que preparar?** El repositorio incluye el Compose oficial de OpenMetadata 2.0.3, el cliente API del agente, cinco mediciones de diagnóstico y una comparación aislada en tabla temporal para dos índices candidatos; también incluye la telemetría PostgreSQL→Promtail→Loki→Grafana. Para una sesión nueva hay que iniciar ambos Compose, crear el servicio PostgreSQL y ejecutar su primera ingesta; el modo IA de catálogo requiere un JWT local. Este laboratorio no exporta métricas nativas de CPU/RAM, no aplica cambios persistentes ni despliega un MSP.

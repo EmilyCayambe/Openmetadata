@@ -1,6 +1,6 @@
 # Diagnóstico y Tuning de Bases de Datos Asistido por IA
 
-Laboratorio académico local con PostgreSQL, OpenMetadata, Ollama y telemetría Promtail/Loki/Grafana. Demuestra el ciclo completo: observar una consulta, enriquecer su contexto con el catálogo, pedir un diagnóstico al modelo y validar un cambio de índice con revisión humana.
+Laboratorio académico local con PostgreSQL, OpenMetadata, Ollama y telemetría Promtail/Loki/Grafana. Demuestra cómo aportar al modelo una consulta, su plan real, el esquema y los índices existentes para obtener un diagnóstico y estrategias de tuneo fundamentadas, sujetas a revisión humana.
 
 ## Qué se demuestra
 
@@ -11,9 +11,9 @@ Laboratorio académico local con PostgreSQL, OpenMetadata, Ollama y telemetría 
 | OpenMetadata 2.0.3 | Ingiere el esquema PostgreSQL y cataloga tablas/columnas |
 | `scripts/ai_db_tuning.py` | Envía al modelo el plan real y el contexto obtenido de OpenMetadata |
 | Ollama | Ejecuta el modelo localmente, sin clave de API externa |
-| Rol MSP/DBA | Revisa y aprueba la recomendación, mide el resultado y conserva una reversa |
+| Rol MSP/DBA | Revisa la recomendación y autoriza una prueba aislada antes de cualquier cambio persistente |
 
-El MSP se representa como un proceso operativo, no como otro contenedor. El laboratorio aplica un índice fijo conocido; nunca ejecuta DDL libre generado por la IA.
+El MSP se representa como un proceso operativo, no como otro contenedor. El agente diagnostica y propone; no modifica el esquema original. El modo de experimento opcional compara una hipótesis sobre una copia temporal de la tabla dentro de una transacción, tras confirmación interactiva. No despliega cambios persistentes.
 
 ## Archivos principales
 
@@ -121,14 +121,14 @@ En la terminal donde correrá el agente, configura el modelo y OpenMetadata:
 ```powershell
 $env:AI_PROVIDER = "ollama"
 $env:OLLAMA_MODEL = "llama3.1:latest"
-$env:OLLAMA_NUM_PREDICT = "512"
+$env:OLLAMA_NUM_PREDICT = "768"
 $env:AI_TIMEOUT_SECONDS = "300"
 $env:OPENMETADATA_URL = "http://localhost:8585/api"
 $env:OPENMETADATA_TABLE_FQN = "postgresql_demo.banco_telemetria.public.transacciones"
 $env:OPENMETADATA_JWT_TOKEN = (Get-Clipboard -Raw).Trim()
 ```
 
-Antes de ejecutar el bloque, abre **Settings → Bots → IngestionBot**, genera un token con vencimiento de 7 días y usa el botón de copiar del campo **OpenMetadata JWT Token**. `Get-Clipboard` lo pone solo en la sesión actual; no lo pegues en el chat ni lo imprimas en la terminal. Revócalo después de la exposición. El agente solo lo usa para leer el contexto de la tabla.
+Antes de ejecutar el bloque, abre **Settings → Bots → IngestionBot**, genera un token con vencimiento de 7 días y pulsa el botón de copiar del campo **OpenMetadata JWT Token**. Copia solo el token desde la interfaz; no selecciones ni copies el bloque de comandos. `Get-Clipboard` lo pone solo en la sesión actual. No lo pegues en el chat ni lo imprimas en la terminal. Revócalo después de la exposición. El agente lo usa para leer el contexto de la tabla.
 
 Ejecuta el diagnóstico integrado, sin cambiar la base:
 
@@ -136,31 +136,61 @@ Ejecuta el diagnóstico integrado, sin cambiar la base:
 py .\scripts\ai_db_tuning.py --provider ollama --use-openmetadata
 ```
 
-La terminal debe indicar `CONTEXTO DE ESQUEMA: OpenMetadata`, mostrar el FQN y las columnas recibidas, y luego el plan y análisis del modelo. Grafana muestra los logs en paralelo en [http://localhost:3000](http://localhost:3000) (`admin/admin`).
+La terminal debe indicar `CONTEXTO DE ESQUEMA: OpenMetadata`, mostrar el FQN y las columnas recibidas, y luego cinco mediciones del plan y un análisis JSON del modelo. El programa comprueba que el modelo haya tenido en cuenta exactamente los índices observados; las advertencias de validación indican posibles contradicciones. Grafana muestra los logs en paralelo en [http://localhost:3000](http://localhost:3000) (`admin/admin`).
 
-## Tuning controlado
-
-Después de revisar el diagnóstico, ejecuta:
+Si OpenMetadata no está disponible, ejecuta el diagnóstico contra el esquema de PostgreSQL directamente:
 
 ```powershell
-py .\scripts\ai_db_tuning.py --provider ollama --use-openmetadata --apply-demo-index
+py .\scripts\ai_db_tuning.py --provider ollama
 ```
 
-El agente vuelve a medir la línea base, consulta catálogo e IA, aplica únicamente `idx_ai_demo_transacciones_cuenta_fecha` sobre `(cuenta_id, fecha_hora DESC)` y muestra plan, buffers y mediana antes/después. El índice puede acelerar este patrón, pero cuesta espacio y trabajo adicional en escrituras. El resultado depende de caché y carga.
+## Probar una hipótesis en una copia temporal
 
-Para retirar solo el índice de demo:
+El diagnóstico predeterminado nunca aplica recomendaciones. Para demostrar una comparación medible, el script ofrece tres candidatos explícitos y permitidos:
+
+| Opción | Índice candidato |
+|---|---|
+| `cuenta_id` | B-tree sobre `cuenta_id`, para probar exactamente la primera recomendación entregada por el modelo |
+| `fecha_hora` | B-tree sobre `fecha_hora`, siguiendo la hipótesis de índice simple |
+| `cuenta_id_fecha_hora` | B-tree compuesto sobre `cuenta_id` y `fecha_hora DESC`, alineado con filtro y orden de la consulta |
+
+Primero revisa el diagnóstico. Después inicia una segunda ejecución indicando la hipótesis que quieres probar. El programa pedirá escribir `EXPERIMENTAR` antes de continuar:
 
 ```powershell
-docker exec db-primary psql -U admin_db -d banco_telemetria -c "DROP INDEX IF EXISTS idx_ai_demo_transacciones_cuenta_fecha;"
+py .\scripts\ai_db_tuning.py --provider ollama --use-openmetadata --experiment-index fecha_hora --confirm-experiment
 ```
+
+Para probar exactamente la primera sugerencia del modelo, usa `cuenta_id`; para comparar la alternativa compuesta, usa `cuenta_id_fecha_hora`. No se ejecuta SQL/DDL escrito por el modelo: el experimento acepta exclusivamente estas opciones predefinidas. La ejecución experimental usa la hipótesis seleccionada previamente y **no vuelve a llamar al modelo**, por lo que un timeout de Ollama no impide continuar; sí requiere OpenMetadata si se conserva `--use-openmetadata`. El comando crea dos copias temporales consistentes de `transacciones`, conserva los índices actuales, agrega el índice candidato solo a una copia, calienta ambos escenarios y alterna cinco mediciones por escenario. Compara medianas, rangos, buffers locales y compartidos, scans de índices, filas copiadas, planes y una huella de los resultados. La salida incluye una comparación en palabras; un delta porcentual negativo indica menor tiempo mediano para el candidato en esta consulta, no una garantía de beneficio global. Al terminar la transacción PostgreSQL elimina ambas copias y el índice temporal; no se modifica permanentemente el esquema de origen.
+
+### Repetir la práctica mañana
+
+La primera recomendación del modelo que se probó fue un índice en `cuenta_id`. Para repetir **esa misma hipótesis** no necesitas volver a preguntarle a la IA, iniciar OpenMetadata, copiar un JWT ni repetir cambios en PostgreSQL. En una terminal nueva de PowerShell, desde la carpeta del proyecto, ejecuta:
+
+```powershell
+cd "C:\Users\thaiz\Downloads\bk_telemetria_opt_bd"
+docker compose up -d db-primary
+docker compose ps db-primary
+py .\scripts\ai_db_tuning.py --experiment-index cuenta_id --confirm-experiment
+```
+
+Cuando lo pida, escribe `EXPERIMENTAR`. El modo experimental usa el candidato indicado, sin llamar a Ollama; compara dos copias temporales del contenido que exista entonces en `transacciones`. Cada ejecución crea y elimina sus propias copias. No hay que deshacer un índice después porque el índice se crea solo en una tabla temporal que desaparece al terminar.
+
+Los datos de PostgreSQL se guardan en el volumen Docker `pgdata`; `docker compose down` no lo elimina. **No uses `docker compose down -v` ni borres el volumen `pgdata`** si quieres conservar la misma base. Si la tabla se modifica, se reinicializa o cambia de tamaño, las mediciones de mañana pueden diferir.
+
+No se puede prometer el mismo tiempo exacto: dependen de la carga del equipo, PostgreSQL y el estado de caché. El script calienta y alterna los escenarios para reducir sesgos, pero el resultado es experimental. Tampoco se garantiza que una consulta nueva al modelo recomiende otra vez `cuenta_id`; los modelos pueden variar o exceder el tiempo límite. Para reproducir la comparación de hoy, usa el comando de experimento anterior y conserva el mismo candidato.
+
+En esta ejecución de laboratorio se observó como referencia: mismas filas devueltas; mediana de 8,905 ms sin el candidato y 0,085 ms con él; `Seq Scan` cambió a `Index Scan`; las lecturas locales bajaron de 1.906 a 6 y el `Sort` permaneció. Es el resultado medido hoy, **no una promesa de que mañana aparezcan los mismos números**.
+
+**Límites y precauciones:** copiar la tabla lee todos sus datos y consume CPU, I/O y espacio temporal en el mismo servidor. Ejecuta esta demostración únicamente en el laboratorio local, con espacio disponible y sin carga concurrente importante; nunca en producción. La comparación repite una consulta sintética y no representa por sí sola la carga completa: incluye posibles efectos de caché, excluye el costo sostenido en escrituras y no sustituye pruebas con carga real. Un cambio de tiempos no demuestra causalidad bajo concurrencia ni garantiza una mejora operacional. Revisa filas iguales, planes y estabilidad de las mediciones antes de interpretar el resultado. El modo por defecto sigue siendo solo diagnóstico.
 
 ## Guion breve para exponer
 
 1. En Grafana, muestra PostgreSQL → Promtail → Loki → Grafana.
 2. En OpenMetadata, enseña la tabla, descripción y columnas ingeridas.
 3. En la terminal, ejecuta el modo `--use-openmetadata`; explica que el modelo recibe plan real y contexto del catálogo.
-4. Como MSP/DBA, revisa la recomendación y explica el control de cambio antes de ejecutar `--apply-demo-index`.
-5. Compara los planes y concluye: OpenMetadata aporta contexto, PostgreSQL ejecuta el índice y el equipo operativo aprueba y mide.
+4. Lee la estrategia sugerida y contrástala con el plan, el esquema y los índices observados; comenta también las advertencias de validación y la evidencia que falta.
+5. Si el laboratorio está desocupado, vuelve a ejecutar el modo experimental con una opción permitida; escribe `EXPERIMENTAR` y compara la mediana, el rango, los buffers, el plan y la huella de resultados.
+6. Concluye que la IA propone hipótesis, el programa las mide solo en una copia temporal y el DBA/MSP mantiene la autoridad sobre cualquier cambio persistente.
 
 ## Operación y solución de problemas
 
