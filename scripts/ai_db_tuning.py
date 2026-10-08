@@ -300,6 +300,93 @@ def plan_nodes(plan):
     return found
 
 
+def interpret_experiment(
+    *,
+    results_match,
+    baseline_ms,
+    candidate_ms,
+    difference_pct,
+    baseline_nodes,
+    candidate_nodes,
+    baseline_buffers,
+    candidate_buffers,
+    candidate_index_scans,
+):
+    if not results_match:
+        conclusion = (
+            "NO VÁLIDO: los resultados de la consulta no coinciden; "
+            "no se debe concluir que el candidato mejora."
+        )
+    elif not candidate_index_scans:
+        local_reads_before = baseline_buffers["local_read_blocks"]
+        local_reads_after = candidate_buffers["local_read_blocks"]
+        conclusion = (
+            "NO SE DEMOSTRÓ UNA MEJORA DEL PLAN: PostgreSQL no usó un índice "
+            "en el escenario candidato. "
+        )
+        if difference_pct is not None and difference_pct < 0:
+            conclusion += (
+                f"Aunque la mediana bajó de {baseline_ms:.3f} a "
+                f"{candidate_ms:.3f} ms ({difference_pct:+.1f}%), ambos escenarios "
+                "mantuvieron el mismo tipo de recorrido; esa diferencia de tiempo "
+                "por sí sola no demuestra un beneficio del índice."
+            )
+        else:
+            conclusion += (
+                "La diferencia observada no respalda aplicar el índice para "
+                "esta consulta."
+            )
+        conclusion += (
+            f" Las lecturas locales cambiaron de {local_reads_before} a "
+            f"{local_reads_after} bloques."
+        )
+    elif difference_pct is not None and difference_pct < 0:
+        conclusion = (
+            f"MEJORA OBSERVADA EN ESTA PRUEBA: PostgreSQL usó un índice en el "
+            f"candidato y la mediana bajó de {baseline_ms:.3f} a "
+            f"{candidate_ms:.3f} ms ({difference_pct:+.1f}%). Esto no garantiza "
+            "mejora bajo carga real ni justifica aplicar el índice en producción."
+        )
+    else:
+        conclusion = (
+            "EL ÍNDICE SE USÓ, pero la mediana no mejoró en esta prueba. "
+            "No hay evidencia para aplicarlo a esta consulta."
+        )
+
+    return [
+        conclusion,
+        (
+            "Nodos antes/después: "
+            f"{', '.join(baseline_nodes)} / {', '.join(candidate_nodes)}."
+        ),
+        (
+            "Buffers medianos hit/read: "
+            f"antes shared {baseline_buffers['shared_hit_blocks']}/"
+            f"{baseline_buffers['shared_read_blocks']}, local "
+            f"{baseline_buffers['local_hit_blocks']}/"
+            f"{baseline_buffers['local_read_blocks']}; después shared "
+            f"{candidate_buffers['shared_hit_blocks']}/"
+            f"{candidate_buffers['shared_read_blocks']}, local "
+            f"{candidate_buffers['local_hit_blocks']}/"
+            f"{candidate_buffers['local_read_blocks']}."
+        ),
+        (
+            "Los buffers locales pertenecen a estas tablas temporales; el tiempo "
+            "puede variar con la caché y la carga. El Sort permanece en ambos "
+            "escenarios."
+            if "Sort" in baseline_nodes and "Sort" in candidate_nodes
+            else "Los buffers locales pertenecen a estas tablas temporales; el "
+            "tiempo puede variar con la caché y la carga."
+        ),
+        (
+            "La huella de resultados coincide; la comparación solo corresponde "
+            "a esta consulta y a estos datos de laboratorio."
+            if results_match
+            else "No apliques el candidato: la huella de resultados es diferente."
+        ),
+    ]
+
+
 def parse_model_diagnosis(content):
     try:
         diagnosis = json.loads(content)
@@ -543,48 +630,19 @@ def run_experiment(args, candidate):
     candidate_nodes = plan_nodes(candidate_plans[-1])
     baseline_summary = summarize_samples(baseline)
     candidate_summary = summarize_samples(candidate_plans)
-    comparison_lines = [
-        (
-            "Los resultados de la consulta coinciden."
-            if baseline_result == candidate_result
-            else "ALERTA: los resultados de la consulta no coinciden."
-        ),
-        (
-            f"Tiempo mediano: {before_ms:.3f} ms sin el candidato frente a "
-            f"{after_ms:.3f} ms con el candidato "
-            f"({after_ms - before_ms:+.3f} ms; {difference_pct:+.1f}%)."
-            if difference_pct is not None
-            else "No se pudo calcular el cambio porcentual porque el tiempo base fue cero."
-        ),
-        (
-            "Nodos del plan: "
-            f"{', '.join(baseline_nodes)} antes; {', '.join(candidate_nodes)} después."
-        ),
-        (
-            "Buffers medianos hit/read: "
-            f"antes shared {baseline_summary['buffers_median']['shared_hit_blocks']}/"
-            f"{baseline_summary['buffers_median']['shared_read_blocks']}, local "
-            f"{baseline_summary['buffers_median']['local_hit_blocks']}/"
-            f"{baseline_summary['buffers_median']['local_read_blocks']}; después shared "
-            f"{candidate_summary['buffers_median']['shared_hit_blocks']}/"
-            f"{candidate_summary['buffers_median']['shared_read_blocks']}, local "
-            f"{candidate_summary['buffers_median']['local_hit_blocks']}/"
-            f"{candidate_summary['buffers_median']['local_read_blocks']}."
-        ),
-        (
-            "El Sort permanece en ambos escenarios."
-            if "Sort" in baseline_nodes and "Sort" in candidate_nodes
-            else "Revisa los nodos Sort en los planes completos para ver si el ordenamiento cambió."
-        ),
-        (
-            "Los bloques locales y compartidos se reportan por separado; "
-            "no interpretes los tiempos sin revisar sus lecturas y aciertos."
-        ),
-        (
-            "Resultado favorable solo para esta consulta y este laboratorio; "
-            "no prueba mejora bajo carga real ni justifica aplicar el índice a la tabla original."
-        ),
-    ]
+    baseline_index_scans = index_scans(baseline[-1])
+    candidate_index_scans = index_scans(candidate_plans[-1])
+    comparison_lines = interpret_experiment(
+        results_match=baseline_result == candidate_result,
+        baseline_ms=before_ms,
+        candidate_ms=after_ms,
+        difference_pct=difference_pct,
+        baseline_nodes=baseline_nodes,
+        candidate_nodes=candidate_nodes,
+        baseline_buffers=baseline_summary["buffers_median"],
+        candidate_buffers=candidate_summary["buffers_median"],
+        candidate_index_scans=candidate_index_scans,
+    )
 
     report = {
         "storage": (
@@ -600,8 +658,8 @@ def run_experiment(args, candidate):
         "candidate": candidate_summary,
         "median_execution_change_percent": difference_pct,
         "median_execution_delta_ms": after_ms - before_ms,
-        "baseline_index_scans": index_scans(baseline[-1]),
-        "candidate_index_scans": index_scans(candidate_plans[-1]),
+        "baseline_index_scans": baseline_index_scans,
+        "candidate_index_scans": candidate_index_scans,
         "baseline_last_plan": summarize_plan(baseline[-1]),
         "candidate_last_plan": summarize_plan(candidate_plans[-1]),
         "comparison": comparison_lines,

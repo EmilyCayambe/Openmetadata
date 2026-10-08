@@ -8,6 +8,7 @@ from unittest.mock import patch
 from scripts.ai_db_tuning import (
     audit_model_diagnosis,
     index_scans,
+    interpret_experiment,
     main,
     parse_model_diagnosis,
     run_experiment,
@@ -106,6 +107,57 @@ class DiagnosisValidationTests(unittest.TestCase):
             [{"node": "Index Scan", "index": "transacciones_pkey"}],
         )
 
+    def test_interpretation_does_not_call_timing_drop_a_win_when_index_unused(self):
+        buffers_before = {
+            "shared_hit_blocks": 0,
+            "shared_read_blocks": 0,
+            "local_hit_blocks": 0,
+            "local_read_blocks": 1906,
+        }
+        buffers_after = {
+            "shared_hit_blocks": 0,
+            "shared_read_blocks": 0,
+            "local_hit_blocks": 1,
+            "local_read_blocks": 1905,
+        }
+        lines = interpret_experiment(
+            results_match=True,
+            baseline_ms=11.838,
+            candidate_ms=10.483,
+            difference_pct=-11.4,
+            baseline_nodes=["Limit", "Sort", "Seq Scan"],
+            candidate_nodes=["Limit", "Sort", "Seq Scan"],
+            baseline_buffers=buffers_before,
+            candidate_buffers=buffers_after,
+            candidate_index_scans=[],
+        )
+
+        self.assertIn("NO SE DEMOSTRÓ UNA MEJORA DEL PLAN", lines[0])
+        self.assertIn("no demuestra un beneficio", lines[0])
+        self.assertIn("1906 a 1905 bloques", lines[0])
+
+    def test_interpretation_marks_used_index_with_lower_median_as_observed_gain(self):
+        buffers = {
+            "shared_hit_blocks": 0,
+            "shared_read_blocks": 0,
+            "local_hit_blocks": 0,
+            "local_read_blocks": 6,
+        }
+        lines = interpret_experiment(
+            results_match=True,
+            baseline_ms=8.9,
+            candidate_ms=0.08,
+            difference_pct=-99.0,
+            baseline_nodes=["Limit", "Sort", "Seq Scan"],
+            candidate_nodes=["Limit", "Sort", "Index Scan"],
+            baseline_buffers=buffers,
+            candidate_buffers=buffers,
+            candidate_index_scans=[{"node": "Index Scan", "index": "candidate_idx"}],
+        )
+
+        self.assertIn("MEJORA OBSERVADA EN ESTA PRUEBA", lines[0])
+        self.assertIn("no garantiza", lines[0])
+
     def test_experiment_uses_transactional_temp_copy_and_parses_multiline_plans(self):
         lines = [
             "__COPY_ROWS__", "112249",
@@ -175,7 +227,10 @@ class DiagnosisValidationTests(unittest.TestCase):
         self.assertEqual(report["baseline"]["execution_time_ms"]["median"], 6.0)
         self.assertEqual(report["candidate"]["execution_time_ms"]["median"], 3.0)
         self.assertEqual(report["baseline"]["buffers_median"]["local_read_blocks"], 0)
-        self.assertTrue(any("Tiempo mediano" in line for line in report["comparison"]))
+        self.assertTrue(
+            any("NO SE DEMOSTRÓ UNA MEJORA DEL PLAN" in line
+                for line in report["comparison"])
+        )
 
     def test_experiment_mode_does_not_call_slow_model_again(self):
         plan = {
